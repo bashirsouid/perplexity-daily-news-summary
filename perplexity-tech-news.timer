@@ -1,0 +1,16 @@
+[Unit]
+Description=Run Tech News Daily
+Requires=perplexity-tech-news.service
+
+[Timer]
+# Run daily at 5:00 PM in system timezone
+OnCalendar=*-*-* 17:00:00
+# Add some randomization to avoid hitting API rate limits
+RandomizedDelaySec=300
+# Make sure it runs even if the scheduled time is missed
+Persistent=true
+# The service to trigger
+Unit=perplexity-tech-news.service
+
+[Install]
+WantedBy=timers.target

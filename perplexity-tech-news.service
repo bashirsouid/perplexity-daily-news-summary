@@ -1,0 +1,15 @@
+[Unit]
+Description=Daily Tech News Digest
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/src/perplexity-daily-news-summary/.env
+ExecStart=%h/src/perplexity-daily-news-summary/perplexity-tech-news.bash
+WorkingDirectory=%h/src/perplexity-daily-news-summary
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
