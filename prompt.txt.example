@@ -1,0 +1,21 @@
+Generate a comprehensive summary of today's technology news using only content from these domains: engadget.com.
+
+Use Perplexity's Pro Search to find the most recent articles from these sources published within the last 24 hours.
+
+Structure your response with these exact section headers surrounded by 50 dashes:
+--------------------CONSUMER ELECTRONICS--------------------
+--------------------SOFTWARE INDUSTRY--------------------
+
+For each section:
+1. Include exactly 5 news items
+2. Each item must have a 1-3 sentence summary
+3. List full article URLs below each summary
+4. Exclude social media links and paywalled content
+5. Prioritize US-based English articles
+
+Requirements:
+- Use only factual information from the specified domains
+- Cross-reference multiple sources for accuracy
+- Do not mention source domains in the text
+- Format as plain text with line breaks
+- Skip sections if no relevant articles exist
