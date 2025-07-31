@@ -23,7 +23,6 @@ log() {
 # --- Environment Management ---
 load_environment() {
     log "Loading environment from: $ENV_FILE"
-    
     [[ ! -f "$ENV_FILE" ]] && { log ".env file missing"; exit 1; }
     [[ "$(stat -c %a "$ENV_FILE")" != "600" ]] && { log "Insecure .env permissions"; exit 1; }
 
@@ -46,10 +45,11 @@ validate_environment() {
     # Check environment variables
     declare -a REQUIRED_VARS=(
         PERPLEXITY_API
-        SENDGRID_API
+        MJ_APIKEY_PUBLIC
+        MJ_APIKEY_PRIVATE
         FROM_EMAIL
         FROM_NAME
-        SENDGRID_TO_EMAIL
+        TO_EMAIL
     )
 
     for var in "${REQUIRED_VARS[@]}"; do
@@ -58,22 +58,22 @@ validate_environment() {
 
     log "Environment validation passed"
     log "PERPLEXITY_API: ${PERPLEXITY_API:0:4}******"
-    log "SENDGRID_KEY: ${SENDGRID_API:0:4}******"
+    log "MJ_APIKEY_PUBLIC: ${MJ_APIKEY_PUBLIC:0:4}******"
 }
 
 # --- API Functions ---
 query_perplexity() {
     local retry_count=0
     local temp_file response http_status json_content
-    
+
     until ((retry_count >= MAX_RETRIES)); do
         temp_file=$(mktemp)
-        
+
         log "API Attempt $((++retry_count))/$MAX_RETRIES"
-        
+
         # Read and escape prompt
         local prompt_content=$(cat "$PROMPT_FILE")
-        
+
         curl -sS \
             -w "\nHTTP_STATUS:%{http_code}" \
             -H "Authorization: Bearer $PERPLEXITY_API" \
@@ -99,7 +99,7 @@ query_perplexity() {
         json_content=$(grep -v HTTP_STATUS "$temp_file")
 
         log "HTTP Status: $http_status"
-        
+
         if [[ "$http_status" -eq 200 ]]; then
             jq -e '.choices[0].message.content' <<< "$json_content" && {
                 echo "$json_content"
@@ -121,36 +121,43 @@ query_perplexity() {
 send_email() {
     local content="$1"
     local payload response http_status
-    
+
     payload=$(jq -n \
-        --arg to "$SENDGRID_TO_EMAIL" \
+        --arg to "$TO_EMAIL" \
         --arg from "$FROM_EMAIL" \
         --arg name "$FROM_NAME" \
         --arg subj "Tech News Digest - $(date +'%Y-%m-%d')" \
         --arg content "$content" \
         '{
-            "personalizations": [{"to": [{"email": $to}]}],
-            "from": {"email": $from, "name": $name},
-            "subject": $subj,
-            "content": [{"type": "text/plain", "value": $content}],
-            "tracking_settings": {
-                "click_tracking": { "enable": false },
-                "open_tracking": { "enable": false }
-            }
+            "Messages": [
+                {
+                    "From": {
+                        "Email": $from,
+                        "Name": $name
+                    },
+                    "To": [
+                        {
+                            "Email": $to
+                        }
+                    ],
+                    "Subject": $subj,
+                    "TextPart": $content
+                }
+            ]
         }')
 
     response=$(curl -sS \
         -w "\nHTTP_STATUS:%{http_code}" \
         -X POST \
-        -H "Authorization: Bearer $SENDGRID_API" \
+        --user "$MJ_APIKEY_PUBLIC:$MJ_APIKEY_PRIVATE" \
         -H "Content-Type: application/json" \
         -d "$payload" \
-        https://api.sendgrid.com/v3/mail/send)
+        https://api.mailjet.com/v3.1/send)
 
     http_status=$(echo "$response" | grep 'HTTP_STATUS' | cut -d':' -f2)
-    
-    if [[ "$http_status" -ne 202 ]]; then
-        log "SendGrid Error: $http_status - $(echo "$response" | grep -v HTTP_STATUS)"
+
+    if [[ "$http_status" -ne 200 ]]; then
+        log "Mailjet Error: $http_status - $(echo "$response" | grep -v HTTP_STATUS)"
         return 1
     fi
 
@@ -177,7 +184,7 @@ main() {
     [[ -z "$news_content" ]] && { log "Empty content"; exit 1; }
 
     log "Content received (${#news_content} chars)"
-    
+
     if ! send_email "$news_content"; then
         log "Failed to send email"
         exit 1
