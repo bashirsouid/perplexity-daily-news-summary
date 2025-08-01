@@ -1,4 +1,4 @@
-# Enhanced Tech News RSS Crawler and Digest System
+# AI Powered Tech News RSS Crawler and Digest System
 
 This enhanced version of the tech news system crawls RSS feeds locally instead of asking Perplexity to search for news online. This provides better control, faster processing, and more reliable results.
 
