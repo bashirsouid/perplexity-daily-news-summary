@@ -1,0 +1,26 @@
+# RSS Feed URLs - one per line
+# The AI will categorize each article based on its content
+
+# Tech News Sources
+https://www.engadget.com/rss.xml
+https://gizmodo.com/feed
+https://techcrunch.com/feed/
+https://arstechnica.com/feed/
+
+# Gadgets and Consumer Electronics
+https://techcrunch.com/category/gadgets/feed/
+https://www.theverge.com/rss/index.xml
+
+# Photography and Camera News
+https://www.dpreview.com/feeds/news.xml
+https://petapixel.com/feed/
+https://fstoppers.com/feed
+
+# Software and Development
+https://www.wired.com/feed/category/business/
+https://techcrunch.com/category/apps/feed/
+https://www.zdnet.com/news/rss.xml
+
+# Additional Sources
+https://9to5mac.com/feed/
+https://androidcentral.com/rss

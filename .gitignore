@@ -1,3 +1,4 @@
 .env
 *.log
 prompt.txt
+rss_data/
