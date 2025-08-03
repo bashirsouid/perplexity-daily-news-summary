@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+
 set -eo pipefail
 
 # --- Configuration ---
@@ -40,13 +41,45 @@ load_environment() {
     done < "$ENV_FILE"
 }
 
+# --- API Key Management ---
+
+get_random_perplexity_api_key() {
+    if [[ -z "$PERPLEXITY_APIS" ]]; then
+        # Fallback to single key for backward compatibility
+        if [[ -n "$PERPLEXITY_API" ]]; then
+            echo "$PERPLEXITY_API"
+            return 0
+        else
+            log "Error: Neither PERPLEXITY_APIS nor PERPLEXITY_API is set"
+            exit 1
+        fi
+    fi
+    
+    local IFS=','
+    read -ra keys <<< "$PERPLEXITY_APIS"
+    local count="${#keys[@]}"
+    
+    if [[ "$count" -eq 0 ]]; then
+        log "Error: No API keys found in PERPLEXITY_APIS"
+        exit 1
+    fi
+    
+    local idx=$(( RANDOM % count ))
+    local selected_key="${keys[$idx]}"
+    
+    # Trim whitespace
+    selected_key=$(echo "$selected_key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    
+    log "Selected API key ${idx+1} of ${count} (${selected_key:0:4}******)"
+    echo "$selected_key"
+}
+
 validate_environment() {
     [[ ! -f "$PROMPT_FILE" ]] && { log "Error: Missing prompt.txt"; exit 1; }
     [[ ! -f "$RSS_FEEDS_FILE" ]] && { log "Error: Missing rss_feeds.txt"; exit 1; }
     [[ "$(stat -c %a "$PROMPT_FILE")" != "600" ]] && { log "Insecure prompt.txt permissions"; exit 1; }
     
     declare -a REQUIRED_VARS=(
-        PERPLEXITY_API
         MJ_APIKEY_PUBLIC
         MJ_APIKEY_PRIVATE
         FROM_EMAIL
@@ -58,9 +91,22 @@ validate_environment() {
         [[ -z "${!var}" ]] && { log "Error: $var not set"; exit 1; }
     done
     
+    # Check API keys
+    if [[ -z "$PERPLEXITY_APIS" && -z "$PERPLEXITY_API" ]]; then
+        log "Error: Neither PERPLEXITY_APIS nor PERPLEXITY_API is set"
+        exit 1
+    fi
+    
     log "Environment validation passed"
-    log "PERPLEXITY_API: ${PERPLEXITY_API:0:4}******"
     log "MJ_APIKEY_PUBLIC: ${MJ_APIKEY_PUBLIC:0:4}******"
+    
+    if [[ -n "$PERPLEXITY_APIS" ]]; then
+        local IFS=','
+        read -ra keys <<< "$PERPLEXITY_APIS"
+        log "Found ${#keys[@]} Perplexity API keys for load balancing"
+    else
+        log "Using single PERPLEXITY_API key: ${PERPLEXITY_API:0:4}******"
+    fi
 }
 
 # --- RSS Functions ---
@@ -264,6 +310,11 @@ crawl_all_feeds() {
 query_perplexity() {
     local rss_content_file="$1"
     
+    # Select a random API key for this request
+    local selected_api_key
+    selected_api_key=$(get_random_perplexity_api_key)
+    export PERPLEXITY_API="$selected_api_key"
+    
     log "Calling Perplexity API using Python (avoids command-line limits)"
     
     # Create Python script to handle API call
@@ -393,18 +444,73 @@ EOF
     fi
 }
 
-# --- Email Sending ---
+# --- Content Formatting Functions ---
+
+markdown_to_html() {
+    local content="$1"
+    
+    # Convert markdown to HTML using Python
+    python3 << EOF
+import re
+import sys
+
+content = """$content"""
+
+# Convert headers with dashes
+content = re.sub(r'^-{50}\n([^\n]+)\n-{50}', r'<h2>\1</h2>', content, flags=re.MULTILINE)
+
+# Convert **bold** to <strong>
+content = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', content)
+
+# Convert URLs to clickable links
+content = re.sub(r'(https?://[^\s<>"]+)', r'<a href="\1">\1</a>', content)
+
+# Convert line breaks to <br> tags, but preserve existing HTML
+lines = content.split('\n')
+html_lines = []
+for line in lines:
+    if line.strip():
+        if not line.strip().startswith('<'):
+            html_lines.append(f'<p>{line.strip()}</p>')
+        else:
+            html_lines.append(line)
+    else:
+        html_lines.append('<br>')
+
+print('\n'.join(html_lines))
+EOF
+}
+
+content_to_plain_text() {
+    local content="$1"
+    
+    # Convert HTML/markdown to plain text
+    echo "$content" | sed -e 's/<[^>]*>//g' -e 's/\*\*//g' -e 's/<strong>//g' -e 's/<\/strong>//g'
+}
+
+# --- Email Sending with HTML and Plain Text ---
 
 send_email() {
     local content="$1"
     local payload response http_status
+    
+    # Generate HTML version
+    local html_content
+    html_content=$(markdown_to_html "$content")
+    
+    # Generate plain text version
+    local text_content
+    text_content=$(content_to_plain_text "$content")
+    
+    log "Sending email with HTML formatting and plain text fallback"
     
     payload=$(jq -n \
         --arg to "$TO_EMAIL" \
         --arg from "$FROM_EMAIL" \
         --arg name "$FROM_NAME" \
         --arg subj "Tech News Digest - $(date +'%Y-%m-%d')" \
-        --arg content "$content" \
+        --arg text_content "$text_content" \
+        --arg html_content "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>Tech News Digest</title></head><body style=\"font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px;\">$html_content</body></html>" \
         '{
             "Messages": [
                 {
@@ -418,7 +524,8 @@ send_email() {
                         }
                     ],
                     "Subject": $subj,
-                    "TextPart": $content
+                    "TextPart": $text_content,
+                    "HTMLPart": $html_content
                 }
             ]
         }')
@@ -438,6 +545,7 @@ send_email() {
         return 1
     fi
     
+    log "Email sent successfully with HTML formatting"
     return 0
 }
 
