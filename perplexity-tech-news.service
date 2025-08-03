@@ -5,7 +5,7 @@ After=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=%h/src/perplexity-daily-news-summary/.env
-ExecStart=%h/src/perplexity-daily-news-summary/perplexity-tech-news.bash
+ExecStart=%h/src/perplexity-daily-news-summary/perplexity-tech-news.run
 WorkingDirectory=%h/src/perplexity-daily-news-summary
 StandardOutput=journal
 StandardError=journal

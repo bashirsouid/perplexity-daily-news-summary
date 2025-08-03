@@ -1,0 +1,543 @@
+#!/usr/bin/env python3
+"""
+Perplexity Tech News Digest
+A Python script that crawls RSS feeds, categorizes articles using AI, and sends formatted emails.
+"""
+
+import os
+import sys
+import json
+import time
+import random
+import logging
+import requests
+import xml.etree.ElementTree as ET
+import re
+from html import unescape
+from urllib.parse import urlparse
+from os.path import basename
+from datetime import datetime, timedelta
+from pathlib import Path
+
+class TechNewsDigest:
+    def __init__(self, script_dir=None):
+        self.script_dir = Path(script_dir or os.path.dirname(os.path.abspath(__file__)))
+        self.env_file = self.script_dir / '.env'
+        self.prompt_file = self.script_dir / 'prompt.txt'
+        self.rss_feeds_file = self.script_dir / 'rss_feeds.txt'
+        self.rss_data_dir = self.script_dir / 'rss_data'
+        self.log_file = self.script_dir / 'tech_news.log'
+
+        self.max_retries = 3
+        self.retry_delay = 10
+        self.max_articles_per_feed = 15
+
+        # Setup logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(self.log_file),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+
+        # Create data directory
+        self.rss_data_dir.mkdir(exist_ok=True)
+
+        # Load environment
+        self.load_environment()
+
+    def load_environment(self):
+        """Load environment variables from .env file"""
+        if not self.env_file.exists():
+            raise FileNotFoundError(f".env file missing: {self.env_file}")
+
+        # Check file permissions
+        file_stat = self.env_file.stat()
+        if oct(file_stat.st_mode)[-3:] != '600':
+            self.logger.warning(f"Insecure .env permissions: {oct(file_stat.st_mode)}")
+
+        # Load variables
+        env_vars = {}
+        with open(self.env_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        # Remove quotes and export prefix
+                        value = value.strip().strip('"').strip("'")
+                        key = key.replace('export ', '').strip()
+                        env_vars[key] = value
+                        os.environ[key] = value
+
+        # Validate required variables
+        required_vars = [
+            'MJ_APIKEY_PUBLIC', 'MJ_APIKEY_PRIVATE',
+            'FROM_EMAIL', 'FROM_NAME', 'TO_EMAIL'
+        ]
+
+        for var in required_vars:
+            if not os.environ.get(var):
+                raise ValueError(f"Required environment variable missing: {var}")
+
+        # Setup API keys
+        self.setup_api_keys()
+
+        self.logger.info("Environment loaded successfully")
+        self.logger.info(f"Mailjet public key: {os.environ['MJ_APIKEY_PUBLIC'][:4]}******")
+
+    def setup_api_keys(self):
+        """Setup Perplexity API keys for load balancing"""
+        perplexity_apis = os.environ.get('PERPLEXITY_APIS')
+        perplexity_api = os.environ.get('PERPLEXITY_API')
+
+        if perplexity_apis:
+            self.api_keys = [key.strip() for key in perplexity_apis.split(',') if key.strip()]
+            self.logger.info(f"Found {len(self.api_keys)} Perplexity API keys for load balancing")
+        elif perplexity_api:
+            self.api_keys = [perplexity_api]
+            self.logger.info(f"Using single Perplexity API key: {perplexity_api[:4]}******")
+        else:
+            raise ValueError("Neither PERPLEXITY_APIS nor PERPLEXITY_API is set")
+
+    def get_random_api_key(self):
+        """Select a random API key for load balancing"""
+        selected = random.choice(self.api_keys)
+        if len(self.api_keys) > 1:
+            idx = self.api_keys.index(selected) + 1
+            self.logger.info(f"Selected API key {idx} of {len(self.api_keys)} ({selected[:4]}******)")
+        return selected
+
+    def clean_text(self, text):
+        """Clean and normalize text content - COMPLETELY FIXED VERSION"""
+        if not text:
+            return ""
+
+        # First, let's see what we're actually getting
+        original_text = text
+
+        # Remove CDATA - NO HTML ENTITIES!
+        text = re.sub(r'<!\[CDATA\[(.*?)\]\]>', r'\1', text, flags=re.DOTALL)
+
+        # Remove HTML tags - NO HTML ENTITIES!
+        text = re.sub(r'<[^>]+>', '', text)
+
+        # Decode HTML entities
+        text = unescape(text)
+
+        # Clean whitespace
+        text = ' '.join(text.split())
+
+        # DEBUG: Log what happened to the text
+        if len(original_text) > 10 and not text:
+            self.logger.warning(f"Text cleaning failed: '{original_text[:100]}...' became empty")
+
+        # Don't truncate titles too aggressively
+        if len(text) > 200:  # Reasonable limit for titles
+            text = text[:200] + "..."
+
+        return text
+
+    def extract_link(self, item):
+        """Extract link from RSS item using multiple methods"""
+
+        # Method 1: Try link element text (traditional RSS)
+        link_elem = item.find('link')
+        if link_elem is not None:
+            if link_elem.text and link_elem.text.strip():
+                link = link_elem.text.strip()
+                # Clean CDATA if present - NO HTML ENTITIES!
+                link = re.sub(r'<!\[CDATA\[(.*?)\]\]>', r'\1', link)
+                if link.startswith('http'):
+                    return link
+
+            # Method 2: Try href attribute (Atom feeds and modern RSS)
+            if 'href' in link_elem.attrib:
+                return link_elem.attrib['href']
+
+        # Method 3: Try guid (many feeds use this as the actual link)
+        guid_elem = item.find('guid')
+        if guid_elem is not None and guid_elem.text:
+            guid = guid_elem.text.strip()
+            guid = re.sub(r'<!\[CDATA\[(.*?)\]\]>', r'\1', guid)
+            if guid.startswith('http'):
+                return guid
+
+        # Method 4: Search for any HTTP URL in the item XML as last resort
+        item_xml = ET.tostring(item, encoding='unicode')
+        # NO HTML ENTITIES!
+        urls = re.findall(r'https?://[^\s<>"]+', item_xml)
+        for url in urls:
+            # Skip image URLs and other non-article URLs
+            if not re.search(r'\.(jpg|jpeg|png|gif|webp|css|js)(\?|$)', url, re.IGNORECASE):
+                # Skip common non-article patterns
+                if not any(skip in url.lower() for skip in ['feedburner', 'doubleclick', 'googletagmanager']):
+                    return url
+
+        return ""
+
+    def get_source_name(self, feed_url):
+        """Extract a clean source name from feed URL"""
+        try:
+            domain = urlparse(feed_url).netloc
+            domain = domain.replace('www.', '')
+            return domain.split('.')[0].title()
+        except:
+            return "Unknown"
+
+    def download_rss_feed(self, feed_url):
+        """Download RSS feed content"""
+        self.logger.info(f"Downloading feed: {feed_url}")
+
+        headers = {'User-Agent': 'RSS-Crawler/1.0'}
+
+        try:
+            response = requests.get(feed_url, headers=headers, timeout=30)
+            response.raise_for_status()
+
+            # Basic validation - NO HTML ENTITIES!
+            content = response.text
+            if not any(tag in content for tag in ['<?xml', '<rss', '<feed']):
+                self.logger.warning(f"Downloaded content is not valid XML/RSS: {feed_url}")
+                return None
+
+            self.logger.info(f"Successfully downloaded: {len(content)} bytes")
+            return content
+
+        except Exception as e:
+            self.logger.error(f"Failed to download {feed_url}: {e}")
+            return None
+
+    def parse_rss_feed(self, content, feed_url):
+        """Enhanced RSS parsing with better debugging"""
+        try:
+            root = ET.fromstring(content)
+
+            # Find items (RSS) or entries (Atom)
+            items = (root.findall('.//item') or 
+                    root.findall('.//{http://www.w3.org/2005/Atom}entry') or
+                    root.findall('.//entry'))
+
+            source_name = self.get_source_name(feed_url)
+            articles = []
+
+            self.logger.info(f"Found {len(items)} items in {source_name}")
+
+            for i, item in enumerate(items[:self.max_articles_per_feed]):
+                # Extract title - FIXED VERSION
+                title_elem = item.find('title')
+                if title_elem is None:
+                    title_elem = item.find('.//{http://www.w3.org/2005/Atom}title')
+                title = self.clean_text(title_elem.text if title_elem is not None else "")
+
+                # Extract link using robust method
+                link = self.extract_link(item)
+
+                # Extract description - FIXED VERSION  
+                desc_elem = item.find('description')
+                if desc_elem is None:
+                    desc_elem = item.find('summary')
+                if desc_elem is None:
+                    desc_elem = item.find('.//{http://www.w3.org/2005/Atom}summary')
+                if desc_elem is None:
+                    desc_elem = item.find('.//{http://www.w3.org/2005/Atom}content')
+                description = self.clean_text(desc_elem.text if desc_elem is not None else "")
+
+                # Debug logging for first few items
+                if i < 3:
+                    title_preview = title[:50] if title else "[EMPTY]"
+                    link_preview = link[:50] if link else "[EMPTY]"
+                    self.logger.info(f"  Item {i+1}: title='{title_preview}', link='{link_preview}'")
+                    self.logger.info(f"    Title length: {len(title)}, Link length: {len(link)}")
+                    self.logger.info(f"    Title bool: {bool(title)}, Link bool: {bool(link)}, HTTP check: {link.startswith('http') if link else False}")
+
+                # Only include if we have both title and link
+                if title and link and link.startswith('http'):
+                    articles.append({
+                        'title': title,
+                        'link': link,
+                        'description': description,
+                        'source': source_name
+                    })
+                else:
+                    if i < 3:  # Debug first few items
+                        self.logger.warning(f"  Skipping item {i+1}: title_valid={bool(title)}, link_valid={bool(link and link.startswith('http'))}")
+
+            self.logger.info(f"Successfully parsed {len(articles)} articles from {source_name}")
+            return articles
+
+        except Exception as e:
+            self.logger.error(f"Error parsing RSS feed: {e}")
+            return []
+
+    def crawl_all_feeds(self):
+        """Crawl all RSS feeds and collect articles"""
+        if not self.rss_feeds_file.exists():
+            raise FileNotFoundError(f"RSS feeds file missing: {self.rss_feeds_file}")
+
+        all_articles = []
+
+        with open(self.rss_feeds_file, 'r') as f:
+            feeds = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+
+        self.logger.info(f"Starting to crawl {len(feeds)} RSS feeds")
+
+        for feed_url in feeds:
+            content = self.download_rss_feed(feed_url)
+            if content:
+                articles = self.parse_rss_feed(content, feed_url)
+                all_articles.extend(articles)
+
+            # Be respectful - small delay between feeds
+            time.sleep(2)
+
+        self.logger.info(f"Total articles collected: {len(all_articles)}")
+        return all_articles
+
+    def format_articles_for_ai(self, articles):
+        """Format articles for AI processing"""
+        formatted = []
+        for article in articles:
+            formatted.append(f"TITLE: {article['title']}")
+            formatted.append(f"LINK: {article['link']}")
+            formatted.append(f"DESCRIPTION: {article['description']}")
+            formatted.append(f"SOURCE: {article['source']}")
+            formatted.append("---")
+
+        return "\n".join(formatted)
+
+    def call_perplexity_api(self, prompt_content, rss_content):
+        """Call Perplexity API with retry logic"""
+        api_key = self.get_random_api_key()
+
+        url = "https://api.perplexity.ai/chat/completions"
+        complete_prompt = f"{prompt_content}\n\nRSS FEED CONTENT:\n{rss_content}"
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "model": "sonar-pro",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a senior technology analyst who excels at categorizing tech news articles by their actual content, regardless of source."
+                },
+                {
+                    "role": "user",
+                    "content": complete_prompt
+                }
+            ]
+        }
+
+        for attempt in range(self.max_retries):
+            try:
+                self.logger.info(f"API Attempt {attempt + 1}/{self.max_retries}")
+
+                response = requests.post(url, headers=headers, json=payload, timeout=60)
+
+                self.logger.info(f"HTTP Status: {response.status_code}")
+
+                if response.status_code == 200:
+                    result = response.json()
+                    if 'choices' in result and len(result['choices']) > 0:
+                        content = result['choices'][0]['message']['content']
+                        self.logger.info(f"Success: Content received ({len(content)} chars)")
+                        return content
+                    else:
+                        self.logger.error("Error: No choices in response")
+                else:
+                    self.logger.error(f"Error response: {response.text}")
+
+            except Exception as e:
+                self.logger.error(f"Request failed: {e}")
+
+            if attempt < self.max_retries - 1:
+                self.logger.info(f"Retrying in {self.retry_delay} seconds...")
+                time.sleep(self.retry_delay)
+
+        raise Exception("API call failed after all retries")
+
+    def query_ai(self, articles):
+        """Query AI to categorize articles"""
+        if not self.prompt_file.exists():
+            raise FileNotFoundError(f"Prompt file missing: {self.prompt_file}")
+
+        # Load prompt
+        with open(self.prompt_file, 'r') as f:
+            prompt_content = f.read()
+
+        # Format articles
+        rss_content = self.format_articles_for_ai(articles)
+
+        self.logger.info(f"Calling Perplexity API with {len(articles)} articles")
+        self.logger.info(f"Prompt: {len(prompt_content)} chars, RSS content: {len(rss_content)} chars")
+
+        # Call API
+        return self.call_perplexity_api(prompt_content, rss_content)
+
+    def markdown_to_html(self, content):
+        """Convert markdown content to HTML with proper link formatting"""
+        # Convert headers with dashes - NO HTML ENTITIES!
+        content = re.sub(r'^-{50}\n([^\n]+)\n-{50}', r'<h2>\1</h2>', content, flags=re.MULTILINE)
+
+        # Convert **bold** to <strong> - NO HTML ENTITIES!
+        content = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', content)
+
+        # Process lines
+        lines = content.split('\n')
+        html_lines = []
+        i = 0
+
+        while i < len(lines):
+            line = lines[i].strip()
+
+            if not line:
+                html_lines.append('<br>')
+                i += 1
+                continue
+
+            if line.startswith('<h2>'):
+                html_lines.append(line)
+                i += 1
+                continue
+
+            if line.startswith('- http'):
+                # Start of a link list
+                html_lines.append('<ul style="margin: 5px 0; padding-left: 20px;">')
+
+                while i < len(lines) and lines[i].strip().startswith('- http'):
+                    link_line = lines[i].strip()[2:]  # Remove '- ' prefix
+                    link_html = re.sub(
+                        r'(https?://[^\s<>"]+)', 
+                        r'<a href="\1" style="color: #0066cc; text-decoration: none;">\1</a>', 
+                        link_line
+                    )
+                    html_lines.append(f'  <li style="margin: 1px 0;">{link_html}</li>')
+                    i += 1
+
+                html_lines.append('</ul>')
+                continue
+
+            # Regular paragraph
+            line = re.sub(
+                r'(https?://[^\s<>"]+)', 
+                r'<a href="\1" style="color: #0066cc; text-decoration: none;">\1</a>', 
+                line
+            )
+            html_lines.append(f'<p style="margin: 8px 0;">{line}</p>')
+            i += 1
+
+        return '\n'.join(html_lines)
+
+    def content_to_plain_text(self, content):
+        """Convert HTML/markdown to plain text"""
+        # Remove HTML tags - NO HTML ENTITIES!
+        text = re.sub(r'<[^>]*>', '', content)
+        # Remove markdown formatting
+        text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+        # Clean up extra whitespace
+        text = re.sub(r'\n\s*\n', '\n\n', text)
+        return text.strip()
+
+    def send_email(self, content):
+        """Send email using Mailjet API with HTML and plain text versions"""
+        # Generate HTML and plain text versions
+        html_content = self.markdown_to_html(content)
+        text_content = self.content_to_plain_text(content)
+
+        # Create HTML email template - NO HTML ENTITIES!
+        html_email = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Tech News Digest</title>
+</head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px;">
+    {html_content}
+</body>
+</html>"""
+
+        payload = {
+            "Messages": [
+                {
+                    "From": {
+                        "Email": os.environ['FROM_EMAIL'],
+                        "Name": os.environ['FROM_NAME']
+                    },
+                    "To": [
+                        {
+                            "Email": os.environ['TO_EMAIL']
+                        }
+                    ],
+                    "Subject": f"Tech News Digest - {datetime.now().strftime('%Y-%m-%d')}",
+                    "TextPart": text_content,
+                    "HTMLPart": html_email
+                }
+            ]
+        }
+
+        self.logger.info("Sending email with HTML formatting and plain text fallback")
+
+        response = requests.post(
+            "https://api.mailjet.com/v3.1/send",
+            auth=(os.environ['MJ_APIKEY_PUBLIC'], os.environ['MJ_APIKEY_PRIVATE']),
+            json=payload
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"Mailjet Error: {response.status_code} - {response.text}")
+
+        self.logger.info("Email sent successfully")
+
+    def cleanup_old_files(self):
+        """Clean up old RSS data files"""
+        cutoff_time = datetime.now() - timedelta(days=7)
+
+        for file_path in self.rss_data_dir.glob("*"):
+            if file_path.is_file() and datetime.fromtimestamp(file_path.stat().st_mtime) < cutoff_time:
+                file_path.unlink()
+
+        self.logger.info("Cleaned up old RSS data files")
+
+    def run(self):
+        """Main execution method"""
+        try:
+            self.logger.info("=== Tech News Digest Startup ===")
+
+            # Crawl RSS feeds
+            articles = self.crawl_all_feeds()
+            if not articles:
+                raise Exception("No articles collected from RSS feeds")
+
+            # Query AI for categorization
+            news_content = self.query_ai(articles)
+            if not news_content:
+                raise Exception("Empty content received from AI")
+
+            self.logger.info(f"Content received ({len(news_content)} chars)")
+
+            # Send email
+            self.send_email(news_content)
+
+            # Cleanup
+            self.cleanup_old_files()
+
+            self.logger.info("=== Success ===")
+
+        except Exception as e:
+            self.logger.error(f"Error: {e}")
+            sys.exit(1)
+
+def main():
+    """Main entry point"""
+    digest = TechNewsDigest()
+    digest.run()
+
+if __name__ == "__main__":
+    main()

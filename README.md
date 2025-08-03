@@ -1,95 +1,218 @@
 # AI Powered Tech News RSS Crawler and Digest System
 
-This enhanced version of the tech news system crawls RSS feeds locally instead of asking Perplexity to search for news online. This provides better control, faster processing, and more reliable results.
+A Python-based system that crawls RSS feeds, categorizes articles using AI, and sends formatted email digests. This enhanced version provides better control, faster processing, and more reliable results than web-based crawling.
 
-## What's New
+## What's New (Latest Updates)
+
+### Major Architecture Changes
+- **Pure Python Implementation**: Complete rewrite from bash/Python hybrid to clean Python-only codebase
+- **Object-Oriented Design**: Clean class structure with organized methods and proper error handling
+- **Multiple API Key Support**: Load balancing across multiple Perplexity API keys to avoid rate limits
+- **HTML Email Formatting**: Rich email formatting with bold headers, clickable links, and plain text fallback
+- **Robust RSS Parsing**: Fixed title extraction, CDATA handling, and XML namespace support
+- **Enhanced Debugging**: Comprehensive logging with step-by-step processing information
 
 ### Key Improvements
 - **Local RSS Crawling**: Downloads and parses RSS feeds directly instead of relying on Perplexity's web search
-- **Better Content Filtering**: Filters by publication date (last 24 hours) and content quality
-- **Configurable Feed Sources**: Easy-to-edit RSS feeds list in `rss_feeds.txt`
-- **Enhanced Error Handling**: Better retry logic and error reporting
-- **Automatic Cleanup**: Removes old RSS data files automatically
-- **Improved Categorization**: More accurate article categorization
+- **Smart Content Filtering**: Filters by content quality and validates both titles and links
+- **Configurable Feed Sources**: Easy-to-edit RSS feeds list in `rss_feeds.txt`  
+- **Advanced Error Handling**: Retry logic, connection handling, and detailed error reporting
+- **Automatic Cleanup**: Removes old RSS data files automatically (7-day retention)
+- **Load Balancing**: Distributes API calls across multiple keys for better performance
 
-### Architecture Changes
-1. **RSS Crawler**: Downloads feeds from configured URLs
-2. **Content Parser**: Extracts recent articles using XML parsing
-3. **Content Consolidator**: Combines articles by category
-4. **Perplexity Processor**: Sends consolidated content to Perplexity for analysis
-5. **Email Delivery**: Sends formatted digest via Mailjet
+### Architecture Flow
+1. **Environment Setup**: Loads API keys, validates configuration, sets up logging
+2. **RSS Crawler**: Downloads feeds from configured URLs with rate limiting
+3. **Content Parser**: Extracts articles using robust XML parsing with multiple fallback methods
+4. **Content Consolidator**: Formats articles for AI processing
+5. **Perplexity Processor**: Sends content to Perplexity AI with load-balanced API keys
+6. **Email Delivery**: Sends HTML-formatted digest via Mailjet with plain text fallback
 
 ## Files Overview
 
 | File | Purpose |
 |------|---------|
-| `perplexity-tech-news-enhanced.bash` | Main enhanced script with RSS crawling |
+| `perplexity-tech-news.run` | Main Python script (executable) |
 | `rss_feeds.txt` | List of RSS feed URLs to crawl |
-| `prompt-updated.txt` | Updated prompt for processing local RSS content |
-| `setup-enhanced-news.bash` | Setup script for easy deployment |
+| `prompt.txt` | AI processing prompt for content categorization |
 | `.env` | API keys and configuration (create manually) |
+| `tech_news.log` | Runtime logs and debugging information |
+| `rss_data/` | Temporary RSS data storage (auto-created) |
 
 ## Installation
 
 ### Prerequisites
 ```bash
-# Ubuntu/Debian
-sudo apt-get update && sudo apt-get install curl jq libxml2-utils
+# Python 3.6+ and pip
+sudo apt-get update && sudo apt-get install python3 python3-pip
 
-# CentOS/RHEL/Fedora  
-sudo yum install curl jq libxml2
-
-# macOS
-brew install curl jq libxml2
+# Required Python packages (auto-installed by script)
+pip3 install requests
 ```
 
 ### Quick Setup
-1. Run the setup script:
+1. Download the main script and support files
+2. Make the script executable:
 ```bash
-chmod +x setup-enhanced-news.bash
-./setup-enhanced-news.bash
+chmod +x perplexity-tech-news.run
 ```
 
-2. Create your `.env` file:
+3. Create your `.env` file:
 ```bash
 cat > .env << 'EOF'
+# Multiple API keys for load balancing (comma-separated)
+PERPLEXITY_APIS=key1,key2,key3
+# OR single API key (backward compatible)
 PERPLEXITY_API=your_perplexity_api_key
+
+# Mailjet configuration
 MJ_APIKEY_PUBLIC=your_mailjet_public_key
 MJ_APIKEY_PRIVATE=your_mailjet_private_key
+
+# Email settings
 FROM_EMAIL=sender@yourdomain.com
-FROM_NAME=Tech News Bot
+FROM_NAME=Tech News Digest
 TO_EMAIL=recipient@yourdomain.com
 EOF
 
 chmod 600 .env
 ```
 
-### Manual Setup
-1. Copy all files to your desired directory
-2. Make scripts executable: `chmod +x *.bash`
-3. Set secure permissions: `chmod 600 .env prompt.txt`
-4. Create RSS data directory: `mkdir rss_data`
+4. Create RSS feeds list:
+```bash
+cat > rss_feeds.txt << 'EOF'
+# Technology News
+https://www.engadget.com/rss.xml
+https://techcrunch.com/feed/
+https://arstechnica.com/feed/
+
+# Photography News  
+https://www.dpreview.com/feeds/news.xml
+https://petapixel.com/feed/
+https://fstoppers.com/feed
+EOF
+```
+
+5. Create the AI prompt:
+```bash
+cat > prompt.txt << 'EOF'
+You are analyzing RSS feed articles from various tech news sources.
+
+Your job is to intelligently categorize each article based on its CONTENT, not its source. A single source can contribute articles to multiple categories.
+
+INSTRUCTIONS:
+1. Read through all the RSS feed articles provided below
+2. For each article, determine which category it best fits based on its title and description
+3. Group articles into the following main categories based on their actual content
+4. Prioritize the most newsworthy and interesting articles (limit to 4-6 articles per category)
+5. Articles about the same topic from different sources should be mentioned together or the best version chosen
+
+CATEGORY GUIDELINES:
+
+**CONSUMER ELECTRONICS**: 
+- Smartphones, tablets, laptops, smart home devices
+- Gaming consoles, VR/AR headsets, wearables  
+- Product launches, reviews, hardware announcements
+- Consumer technology trends and releases
+
+**PHOTOGRAPHY GEAR**:
+- Cameras, lenses, photography equipment
+- Photography techniques, tutorials, industry news
+- Camera reviews, new camera releases
+- Photography software and editing tools
+
+**SOFTWARE INDUSTRY**:
+- Programming, development tools, frameworks
+- Business software, enterprise tech, SaaS
+- Tech company news, acquisitions, funding
+- AI/ML developments, cybersecurity, data privacy
+- App releases, software updates, platform changes
+
+FORMATTING REQUIREMENTS:
+- Use exactly this format with 50 dashes above and below each header.
+- Then the next line is the title in bold using **bold text** markdown syntax.
+- Then the next line is a multi-sentence summary of the articles' contents in regular text.
+- Then the next line(s) are the links to the references used to generate the summary.
+
+FORMATTING EXAMPLE:
+--------------------------------------------------
+CONSUMER ELECTRONICS
+--------------------------------------------------
+**New iPhone 15 Features Revolutionary Camera System**
+Apple has announced the iPhone 15 will include a groundbreaking camera system with improved low-light performance. The device also features a new titanium build and enhanced battery life. Pre-orders begin next Friday with shipping expected in early October.
+- https://example.com/iphone15-announcement
+- https://example.com/iphone15-camera-review
+
+**Samsung Galaxy Watch 6 Adds Health Monitoring**
+Samsung's latest smartwatch introduces advanced sleep tracking and blood glucose monitoring capabilities. The device runs on the company's new Wear OS 4 platform and promises 48-hour battery life. It will be available in three sizes starting at $299.
+- https://example.com/galaxy-watch6-features
+- https://example.com/samsung-health-tech
+
+ADDITIONAL FORMATTING INSTRUCTIONS:
+- Under each section, write a short title using **double asterisks for bold text**
+- Follow the title with a 4-6 sentence summary in regular text (no bold formatting)
+- Place the full article URLs as bullet points immediately after each summary
+- Skip sections entirely if no relevant articles are found
+- Prioritize recent, substantial news over minor updates
+- Do not put a list of references at the end of your response
+- Do not use reference markers like [1] anywhere in your response
+
+CONTENT FILTERING:
+- Only include articles that are actually news, not speculation or rumors
+- Skip promotional content, sponsored articles, and fluff pieces
+- Focus on significant developments, product launches, industry changes
+
+INPUT DATA PARSING:
+Each article in the RSS content follows this format:
+
+TITLE: [Article Title]
+LINK: [Article URL]  
+DESCRIPTION: [Article Summary]
+SOURCE: [Source Name]
+---
+
+Analyze the content below and create your categorized summary:
+EOF
+
+chmod 600 prompt.txt
+```
 
 ## Configuration
 
 ### RSS Feeds (`rss_feeds.txt`)
 Edit this file to add/remove RSS feeds. Format: one URL per line, comments start with `#`.
 
+**Supported Categories:**
+- Technology news (Engadget, TechCrunch, Ars Technica)
+- Photography (DPReview, PetaPixel, Fstoppers)  
+- Add any RSS feed - the AI will categorize content automatically
+
 ### Environment Variables (`.env`)
+
+**Multiple API Keys (Recommended):**
 ```bash
-PERPLEXITY_API=your_api_key          # Perplexity AI API key
-MJ_APIKEY_PUBLIC=mailjet_public      # Mailjet public key
-MJ_APIKEY_PRIVATE=mailjet_private    # Mailjet private key
-FROM_EMAIL=sender@domain.com         # Sender email
-FROM_NAME=News Digest                # Sender name
-TO_EMAIL=recipient@domain.com        # Recipient email
+PERPLEXITY_APIS=key1,key2,key3,key4        # Comma-separated, no spaces
+```
+
+**Single API Key (Backward Compatible):**
+```bash
+PERPLEXITY_API=your_single_api_key
+```
+
+**Required Settings:**
+```bash
+MJ_APIKEY_PUBLIC=mailjet_public_key         # Mailjet public key
+MJ_APIKEY_PRIVATE=mailjet_private_key       # Mailjet private key
+FROM_EMAIL=sender@yourdomain.com            # Sender email
+FROM_NAME=Tech News Digest                  # Sender name
+TO_EMAIL=recipient@yourdomain.com           # Recipient email
 ```
 
 ## Usage
 
 ### Run Once
 ```bash
-./perplexity-tech-news-enhanced.bash
+./perplexity-tech-news.run
 ```
 
 ### Schedule with Cron
@@ -98,148 +221,188 @@ TO_EMAIL=recipient@domain.com        # Recipient email
 crontab -e
 
 # Add line for daily execution at 8 AM
-0 8 * * * /path/to/perplexity-tech-news-enhanced.bash
+0 8 * * * /path/to/perplexity-tech-news.run >> /path/to/cron.log 2>&1
 ```
 
 ### Monitor Logs
 ```bash
+# Follow real-time logs
 tail -f tech_news.log
+
+# Check recent errors
+grep -i error tech_news.log | tail -10
+
+# View API key usage
+grep -i "selected api key" tech_news.log
 ```
 
 ## How It Works
 
-### 1. RSS Feed Crawling
-- Reads URLs from `rss_feeds.txt`
-- Downloads each RSS feed with proper error handling
-- Validates XML format
-- Respects rate limits (2-second delay between feeds)
+### 1. Environment & Setup
+- Validates API keys and email configuration
+- Sets up logging to both file and console
+- Creates necessary directories
+- Detects single vs. multiple API keys for load balancing
 
-### 2. Content Processing
-- Parses XML using `xmllint`
-- Extracts title, link, description, publication date
-- Filters articles by age (last 24 hours)
-- Categorizes articles based on source URL patterns
-- Consolidates into structured format
+### 2. RSS Feed Processing
+- Downloads feeds with proper User-Agent headers
+- Validates XML format and content
+- Parses using ElementTree with multiple namespace support
+- Extracts titles, links, descriptions with robust fallback methods
+- Handles CDATA sections and HTML entities properly
 
-### 3. AI Processing
-- Sends consolidated RSS content to Perplexity
-- Uses updated prompt optimized for local content
-- Requests structured output with proper formatting
-- Handles API retries and error responses
+### 3. Content Extraction & Validation
+- Cleans HTML tags and normalizes text
+- Validates that articles have both titles and links
+- Skips articles with missing or invalid data
+- Logs processing details for debugging
 
-### 4. Email Delivery
-- Formats content for email
-- Sends via Mailjet API
-- Includes proper error handling and logging
+### 4. AI Processing with Load Balancing
+- Randomly selects API key from available pool
+- Formats RSS content for AI analysis
+- Sends to Perplexity API with retry logic
+- Handles rate limiting and API errors gracefully
+
+### 5. Email Generation & Delivery
+- Converts markdown to HTML for rich formatting
+- Creates plain text version for compatibility
+- Sends multipart email (HTML + plain text)
+- Provides clickable links and proper styling
 
 ## Troubleshooting
 
 ### Common Issues
 
-**Missing Dependencies**
+**No Articles Found**
 ```bash
-# Check what's missing
-command -v curl jq xmllint
+# Check RSS feeds are accessible
+curl -I https://www.engadget.com/rss.xml
 
-# Install missing packages (Ubuntu/Debian)
-sudo apt-get install curl jq libxml2-utils
+# Verify script permissions
+ls -la perplexity-tech-news.run
+
+# Check for title extraction issues
+./perplexity-tech-news.run 2>&1 | grep "title_valid"
 ```
 
-**RSS Feed Errors**
-- Check `tech_news.log` for specific feed errors
-- Verify RSS URLs are valid and accessible
-- Some feeds may have changed URLs or formats
-
-**API Failures**
-- Verify API keys in `.env` file
-- Check API rate limits and quotas
-- Review network connectivity
-
-**Permission Errors**
+**API Key Issues**
 ```bash
-# Fix file permissions
-chmod 600 .env prompt.txt
-chmod +x perplexity-tech-news-enhanced.bash
-chmod 644 rss_feeds.txt
-```
+# Verify API keys format in .env
+cat .env | grep PERPLEXITY
 
-**XML Parsing Issues**
-- Install libxml2-utils: `sudo apt-get install libxml2-utils`
-- Check if RSS feeds return valid XML
-
-### Debug Mode
-Add debug output by modifying the log level:
-```bash
-# Add to script temporarily
-set -x  # Enable debug output
-```
-
-### Testing Individual Components
-
-**Test RSS Download**
-```bash
-curl -sS -L -m 30 -A "RSS-Crawler/1.0" "https://www.example.com/rss.xml" | head -20
-```
-
-**Test XML Parsing**
-```bash
-xmllint --xpath "//item/title/text()" feed.xml | head -5
-```
-
-**Test Perplexity API**
-```bash
-# Use curl to test API directly with your key
-curl -H "Authorization: Bearer YOUR_API_KEY" \
+# Test single API key
+curl -H "Authorization: Bearer YOUR_KEY" \
      -H "Content-Type: application/json" \
-     -d '{"model":"sonar-pro","messages":[{"role":"user","content":"Test"}]}' \
+     -d '{"model":"sonar-pro","messages":[{"role":"user","content":"test"}]}' \
      https://api.perplexity.ai/chat/completions
 ```
 
-## Customization
-
-### Adding New RSS Feeds
-1. Edit `rss_feeds.txt`
-2. Add URL on new line
-3. Feeds are automatically categorized by URL patterns
-
-### Modifying Categories
-Edit the categorization logic in the `parse_rss_feed()` function:
+**Email Delivery Problems**
 ```bash
-case "$feed_url" in
-    *yoursite*) category="YOUR CATEGORY" ;;
-esac
+# Check Mailjet credentials
+grep MJ_APIKEY .env
+
+# Verify email addresses are valid
+grep EMAIL .env
 ```
 
-### Changing Time Window
-Modify `MAX_FEED_AGE_HOURS` variable:
+**Python Dependencies**
 ```bash
-MAX_FEED_AGE_HOURS=48  # Change to 48 hours
+# Install required packages
+pip3 install requests
+
+# Check Python version (needs 3.6+)
+python3 --version
 ```
 
-### Custom Prompt
-Edit `prompt-updated.txt` to modify how Perplexity processes the content.
+### Debug Mode
+Enable detailed debugging by modifying the logging level in the script:
+```python
+logging.basicConfig(level=logging.DEBUG, ...)
+```
 
-## Security Notes
+### Testing Components
 
-- `.env` file contains sensitive API keys - keep permissions at 600
-- RSS data is automatically cleaned up after 7 days
-- All downloads respect robots.txt and use appropriate user agents
-- No sensitive data is logged (API keys are masked)
+**Test RSS Download:**
+```bash
+python3 -c "
+import requests
+response = requests.get('https://www.engadget.com/rss.xml', timeout=30)
+print(f'Status: {response.status_code}, Length: {len(response.text)}')
+print(response.text[:200])
+"
+```
+
+**Test Title Extraction:**
+```bash
+python3 -c "
+import xml.etree.ElementTree as ET
+import requests
+response = requests.get('https://www.engadget.com/rss.xml')
+root = ET.fromstring(response.text)
+items = root.findall('.//item')
+print(f'Found {len(items)} items')
+if items:
+    title = items[0].find('title')
+    print(f'First title: {title.text if title is not None else "None"}')
+"
+```
+
+## Features
+
+### Load Balancing
+- **Automatic Distribution**: API calls distributed across multiple keys
+- **Random Selection**: Each request uses a different key
+- **Usage Logging**: Track which keys are being used
+- **Graceful Fallback**: Single key mode if only one provided
+
+### Email Formatting
+- **HTML Rich Text**: Bold headers, clickable links, proper styling
+- **Plain Text Fallback**: Automatic plain text version for compatibility
+- **Link Lists**: Clean formatting for reference links
+- **Responsive Design**: Proper CSS for various email clients
+
+### RSS Processing
+- **Multi-Format Support**: RSS 2.0, Atom, and various custom formats
+- **Robust Parsing**: Multiple fallback methods for title/link extraction
+- **Content Validation**: Ensures articles have required fields
+- **Error Recovery**: Continues processing even if individual feeds fail
+
+### Monitoring & Debugging
+- **Comprehensive Logging**: All operations logged with timestamps
+- **Debug Information**: Detailed parsing information for troubleshooting
+- **Performance Metrics**: Processing time and article counts
+- **Error Tracking**: Clear error messages with context
 
 ## Performance
 
-- **RSS Crawling**: ~2-5 seconds per feed
-- **Processing**: ~10-30 seconds depending on content volume
-- **API Call**: ~5-15 seconds depending on content size
-- **Total Runtime**: Usually 1-3 minutes for 8-10 feeds
+- **RSS Crawling**: ~2-5 seconds per feed (with 2s delay between feeds)
+- **Content Processing**: ~5-15 seconds depending on article count
+- **API Processing**: ~10-30 seconds depending on content volume
+- **Email Delivery**: ~2-5 seconds
+- **Total Runtime**: Usually 2-4 minutes for 8-10 feeds
 
-## Migration from Original Script
+## Security
 
-The enhanced script maintains compatibility with the original `.env` file and email settings. Key differences:
+- **API Key Protection**: Keys masked in logs, secure file permissions
+- **Data Cleanup**: RSS data automatically purged after 7 days
+- **Respectful Crawling**: Proper User-Agent, rate limiting
+- **Input Validation**: All URLs and content validated before processing
 
-1. **RSS Content**: Now downloaded locally instead of searched via Perplexity
-2. **Prompt**: Updated to work with pre-processed RSS content
-3. **Dependencies**: Requires `xmllint` for XML parsing
-4. **Structure**: More modular with separate functions for RSS handling
+## Migration Notes
 
-Your existing `.env` file and cron jobs should work without modification.
+### From Bash Version
+The Python version maintains full compatibility with existing `.env` files and configurations. Key improvements:
+
+1. **Better Error Handling**: More robust error recovery
+2. **Improved Performance**: Faster processing and fewer dependencies
+3. **Enhanced Debugging**: Better logging and troubleshooting
+4. **Load Balancing**: Support for multiple API keys
+5. **Rich Email**: HTML formatting with fallbacks
+
+### Configuration Changes
+- **Multiple API Keys**: Add `PERPLEXITY_APIS=key1,key2,key3` for load balancing
+- **Dependencies**: Only requires Python 3.6+ and `requests` package
+- **File Structure**: Simpler structure with fewer files
+
+Your existing cron jobs and email settings work without modification.
